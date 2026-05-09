@@ -5,7 +5,12 @@ import json
 import os
 import platform
 import locale
+import webbrowser
 from pathlib import Path
+
+# --- VERSIÓN DE LA APP ---
+APP_VERSION = "v1.0.0"
+GITHUB_URL = "https://github.com/Dakros66/DOC-3D-Profile-Inspector"
 
 # --- DICCIONARIO DE IDIOMAS ---
 TRANSLATIONS = {
@@ -236,7 +241,7 @@ class ProfessionalCompareApp(ctk.CTk):
         self.current_lang = self.detect_system_language()
 
         # Configuración de la ventana
-        self.title("DOC 3D Profile Inspector")
+        self.title(f"DOC 3D Profile Inspector - {APP_VERSION}")
         self.geometry("1300x850") 
         self.configure(fg_color=BG_MAIN)
         self.minsize(1100, 750)
@@ -283,26 +288,23 @@ class ProfessionalCompareApp(ctk.CTk):
         self.crear_panel_principal()
 
     def T(self, key):
-        """ Función auxiliar para obtener el texto traducido """
         return TRANSLATIONS[self.current_lang].get(key, key)
 
     def detect_system_language(self):
         try:
-            # Obtiene el código ISO del idioma (ej: 'es', 'en', 'fr')
             loc = locale.getdefaultlocale()[0]
             if loc:
                 code = loc[:2].lower()
                 if code in TRANSLATIONS:
                     return code
         except: pass
-        return 'en' # Fallback seguro
+        return 'en' 
 
     def change_language(self, selected_language_name):
         self.current_lang = LANG_MAP[selected_language_name]
         self.retranslate_ui()
 
     def retranslate_ui(self):
-        """ Actualiza todos los textos de la interfaz en caliente """
         self.logo_label.configure(text=self.T("title"))
         self.lbl_step1.configure(text=self.T("step1"))
         self.lbl_printer.configure(text=self.T("printer"))
@@ -318,20 +320,20 @@ class ProfessionalCompareApp(ctk.CTk):
         else:
             self.lbl_status.configure(text=self.T("status_wait"))
 
-        # Actualizar las listas de los combobox para que cambien [USUARIO] a [USER], etc.
         for tipo, dd in [("machine", self.dd_maquina), ("process", self.dd_proceso), ("filament", self.dd_filamento)]:
             sel = dd.get()
             dd.configure(values=self.get_sorted_keys(tipo))
-            # Si decía "No encontrados", actualizarlo
             if sel in ["No encontrados", "Not found", "Introuvable", "Nicht gefunden", "未找到"]:
                 dd.set(self.T("not_found"))
 
-        # Refrescar panel derecho
         if self.diferencias_actuales:
             self.renderizar_resultados()
         else:
             self.header_label.configure(text=self.T("res_title"))
             self.render_empty_state(self.T("res_welcome"))
+
+    def abrir_github(self):
+        webbrowser.open(GITHUB_URL)
 
     # --- SISTEMA DE FAVORITOS ---
     def cargar_favoritos(self):
@@ -350,7 +352,6 @@ class ProfessionalCompareApp(ctk.CTk):
         seleccion_actual = combobox.get().replace("⭐ ", "")
         if not seleccion_actual or seleccion_actual == self.T("not_found"): return
 
-        # Guardamos la ruta o un identificador interno, no el texto traducido
         ruta_vinculada = self.encontrar_ruta_por_nombre(seleccion_actual, tipo)
         if not ruta_vinculada: return
 
@@ -378,7 +379,6 @@ class ProfessionalCompareApp(ctk.CTk):
 
     def encontrar_ruta_por_nombre(self, nombre_mostrado, tipo):
         for original, ruta in self.perfiles_dict[tipo].items():
-            # Limpiamos las etiquetas para comparar
             limpio_orig = original.replace("[USER]", "").replace("[SYSTEM]", "").strip()
             limpio_most = nombre_mostrado.replace(self.T("tag_user"), "").replace(self.T("tag_system"), "").strip()
             if limpio_orig == limpio_most:
@@ -423,7 +423,6 @@ class ProfessionalCompareApp(ctk.CTk):
                                     tipo = data.get("type", "unknown")
                                     if tipo in ["machine", "process", "filament"] and not nombre_sin_ext.startswith("fdm_"):
                                         nombre_original = data.get("name", nombre_sin_ext)
-                                        # Guardamos internamente siempre como [USER] o [SYSTEM]
                                         categoria = "[USER]" if "user/default" in root else "[SYSTEM]"
                                         nombre_interno = f"{categoria} {nombre_original}"
                                         self.perfiles_dict[tipo][nombre_interno] = ruta_absoluta
@@ -432,12 +431,10 @@ class ProfessionalCompareApp(ctk.CTk):
     def get_sorted_keys(self, tipo):
         nombres_internos = list(self.perfiles_dict[tipo].keys())
         
-        # Traducir los nombres para mostrarlos
         nombres_mostrados = []
         rutas = []
         for n in nombres_internos:
             ruta = self.perfiles_dict[tipo][n]
-            # Cambiamos las etiquetas internas por las traducidas
             n_traducido = n.replace("[USER]", self.T("tag_user")).replace("[SYSTEM]", self.T("tag_system"))
             nombres_mostrados.append((n_traducido, ruta))
 
@@ -525,6 +522,18 @@ class ProfessionalCompareApp(ctk.CTk):
         self.lbl_status = ctk.CTkLabel(self.sidebar_frame, text=self.T("status_wait"), font=ctk.CTkFont(size=13), text_color=TEXT_MUTED)
         self.lbl_status.grid(row=12, column=0, padx=30, pady=10)
 
+        # --- FOOTER (VERSIÓN Y GITHUB) ---
+        self.sidebar_frame.grid_rowconfigure(13, weight=1) # Empuja el footer hacia abajo
+        
+        self.footer_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        self.footer_frame.grid(row=14, column=0, padx=30, pady=20, sticky="ew")
+        
+        self.lbl_version = ctk.CTkLabel(self.footer_frame, text=APP_VERSION, font=ctk.CTkFont(size=12), text_color=TEXT_MUTED)
+        self.lbl_version.pack(side="left")
+        
+        self.btn_github = ctk.CTkButton(self.footer_frame, text="GitHub ↗", width=70, height=28, fg_color=BG_CARD, hover_color="#4F4F56", font=ctk.CTkFont(size=12, weight="bold"), command=self.abrir_github)
+        self.btn_github.pack(side="right")
+
     def crear_panel_principal(self):
         self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.main_frame.grid(row=0, column=1, sticky="nsew", padx=30, pady=30)
@@ -537,7 +546,6 @@ class ProfessionalCompareApp(ctk.CTk):
         self.header_label = ctk.CTkLabel(self.header_frame, text=self.T("res_title"), font=ctk.CTkFont(size=28, weight="bold"))
         self.header_label.pack(side="left")
 
-        # --- SELECTOR DE IDIOMA ---
         self.lang_menu = ctk.CTkOptionMenu(
             self.header_frame, values=list(LANG_MAP.keys()), 
             command=self.change_language, width=120, 
@@ -665,7 +673,6 @@ class ProfessionalCompareApp(ctk.CTk):
             v_snap = snap_p.get(k, valor_rescate)
             
             if str(v_mw) != str(v_snap):
-                # Si el valor dice "Inherited...", lo traducimos si es que venía quemado del método anterior
                 if v_snap == "Heredado del Slicer": v_snap = self.T("inherited")
                 
                 self.diferencias_actuales.append({
