@@ -2,6 +2,11 @@
 
 *Read this in other languages: [Español](README_es.md)*
 
+<p align="center">
+  <img src="ex1.png" alt="DOC 3D Profile Inspector Preview" width="500">
+</p>
+
+
 **DOC 3D Profile Inspector** is a professional desktop tool designed to analyze and compare `.3mf` 3D printing files (like those from MakerWorld or Printables) with your local **Snapmaker Orca / Orca Slicer** profiles.
 
 When you import a `.3mf` file, many custom settings from the original creator (layer heights, wall counts, infill patterns, supports) are often lost or overwritten by your default profiles. This app solves that by resolving the full inheritance tree and showing you exactly what needs to be adjusted.
