@@ -7,13 +7,20 @@ import platform
 import locale
 import webbrowser
 import re
+import xml.etree.ElementTree as ET
+import posixpath
 from pathlib import Path
 
 # --- VERSIÓN DE LA APP ---
-APP_VERSION = "v1.0.1"
+APP_VERSION = "v1.1.0"
 GITHUB_URL = "https://github.com/Dakros66/DOC-3D-Profile-Inspector"
 
-# --- DICCIONARIO DE IDIOMAS (Solo EN y ES) ---
+# --- CONSTANTES DEL CONVERSOR (Desde Flask app.py) ---
+TARGET_FILAMENTS = 4
+DEFAULT_FILAMENT_PROFILE = 'Snapmaker PLA SnapSpeed @U1'
+FILAMENT_PROFILES_FILE = 'filament_types.3mf'
+
+# --- DICCIONARIO DE IDIOMAS ---
 TRANSLATIONS = {
     "en": {
         "title": "DOC 3D\nPROFILE INSPECTOR",
@@ -30,7 +37,7 @@ TRANSLATIONS = {
         "status_wait": "Waiting for files...",
         "status_3mf_ok": "✅ 3MF loaded",
         "status_auto_mat": "🎯 Mat. auto-selected: {}",
-        "res_title": "Analysis Results",
+        "res_title": "Project Details",
         "res_welcome": "Welcome. Build your profile and load a .3mf to start.",
         "res_no_diff": "✅ No differences detected.",
         "res_no_basic": "No critical basic changes.\nDisable 'Basic Filter' to see advanced settings.",
@@ -72,7 +79,15 @@ TRANSLATIONS = {
         "txt_change_to": "- Change TO (MakerWorld):",
         "txt_current": "- Current (Your U1):",
         "txt_none": "None",
-        "not_sliced": "Not Sliced"
+        "not_sliced": "Not Sliced",
+        "tab_inspector": "🔍 Inspector",
+        "tab_converter": "🛠️ U1 Converter",
+        "conv_title": "Smart Conversion to Snapmaker U1",
+        "conv_desc": "1. Bambu Lab critical settings will be wiped.\n2. Snapmaker U1 Master Template will be injected.\n3. The checked parameters below will be kept from the original creator.",
+        "conv_btn": "💾 Generate Adapted .3MF",
+        "conv_success": "Adapted .3mf file generated successfully! You can now open it in Snapmaker Orca.",
+        "conv_filaments": "Detected AMS Filaments (Auto-mapping to Extruders 1-4):",
+        "conv_no_filaments": "No filaments detected yet. Load a .3mf file."
     },
     "es": {
         "title": "DOC 3D\nPROFILE INSPECTOR",
@@ -89,7 +104,7 @@ TRANSLATIONS = {
         "status_wait": "Esperando archivos...",
         "status_3mf_ok": "✅ Archivo 3MF cargado",
         "status_auto_mat": "🎯 Mat. auto-seleccionado: {}",
-        "res_title": "Resultados del Análisis",
+        "res_title": "Detalles del Proyecto",
         "res_welcome": "Bienvenido. Construye tu perfil y carga un .3mf para empezar.",
         "res_no_diff": "✅ No hay diferencias detectadas.",
         "res_no_basic": "No hay cambios básicos vitales.\nDesactiva el 'Filtro Básico' para ver ajustes internos.",
@@ -131,11 +146,18 @@ TRANSLATIONS = {
         "txt_change_to": "- Cambiar A (MakerWorld):",
         "txt_current": "- Actual (Tu U1):",
         "txt_none": "Ninguno",
-        "not_sliced": "Sin Laminar"
+        "not_sliced": "Sin Laminar",
+        "tab_inspector": "🔍 Inspector",
+        "tab_converter": "🛠️ Conversor U1",
+        "conv_title": "Conversión Inteligente a Snapmaker U1",
+        "conv_desc": "1. Los ajustes críticos de Bambu Lab serán destruidos.\n2. Se inyectará la Plantilla Maestra de Snapmaker U1.\n3. Los parámetros marcados abajo se CONSERVARÁN del creador original.",
+        "conv_btn": "💾 Generar .3MF Adaptado",
+        "conv_success": "¡Archivo .3mf adaptado generado con éxito! Ya puedes abrirlo en Snapmaker Orca.",
+        "conv_filaments": "Filamentos AMS Detectados (Mapeo automático a Extrusores 1-4):",
+        "conv_no_filaments": "Aún no hay filamentos. Carga un archivo .3mf primero."
     }
 }
 
-# --- TOOLTIPS ESPECÍFICOS ---
 TOOLTIPS = {
     "layer_height": {"es": "Altura de cada capa. Menor valor = más detalle pero más tiempo de impresión.", "en": "Height of each layer. Lower value = more detail but longer print time."},
     "wall_loops": {"es": "Número de perímetros o paredes exteriores. Aumentarlo mejora la resistencia.", "en": "Number of outer wall loops. Increasing it improves part strength."},
@@ -147,6 +169,14 @@ TOOLTIPS = {
     "bottom_shell_layers": {"es": "Número de capas sólidas en la base de la pieza.", "en": "Number of solid layers at the bottom of the print."},
     "seam_position": {"es": "Posición de la costura (donde empieza y acaba cada capa).", "en": "Seam position (where each layer starts and ends)."},
     "ironing_type": {"es": "Alisado. La boquilla plancha la última capa para un acabado liso.", "en": "Ironing. The nozzle irons the top surface for a smooth finish."}
+}
+
+CONVERTER_PARAMS = {
+    "quality": ["layer_height", "initial_layer_height", "seam_position", "ironing_type", "ironing_flow", "ironing_speed", "wall_generator", "elefant_foot_compensation", "precision"],
+    "strength": ["wall_loops", "top_shell_layers", "bottom_shell_layers", "sparse_infill_density", "sparse_infill_pattern", "infill_combination", "infill_wall_overlap"],
+    "support": ["enable_support", "support_type", "support_style", "support_top_z_distance", "support_bottom_z_distance", "support_interface_layers", "support_interface_spacing", "support_expansion"],
+    "adhesion": ["brim_type", "brim_width", "draft_shield"],
+    "temperature": ["nozzle_temperature", "nozzle_temperature_initial_layer", "hot_plate_temp", "hot_plate_temp_initial_layer", "temperature_vitrification", "chamber_temperature"]
 }
 
 LANG_MAP = {"English": "en", "Español": "es"}
@@ -173,7 +203,7 @@ class ProfessionalCompareApp(ctk.CTk):
         self.current_lang = self.detect_system_language()
 
         self.title(f"DOC 3D Profile Inspector - {APP_VERSION}")
-        self.geometry("1400x900") 
+        self.geometry("1450x900") 
         self.configure(fg_color=BG_MAIN)
         self.minsize(1200, 800)
 
@@ -190,6 +220,9 @@ class ProfessionalCompareApp(ctk.CTk):
 
         self.placas_data = {}     
         self.info_placas = {}
+        self.ruta_3mf_actual = None
+        self.detected_filaments = []
+        self.available_filaments = self.load_filament_profiles()
 
         self.perfiles_dict = {"machine": {}, "process": {}, "filament": {}}
         self.diccionario_rutas_global = {}
@@ -208,6 +241,63 @@ class ProfessionalCompareApp(ctk.CTk):
 
     def T(self, key):
         return TRANSLATIONS[self.current_lang].get(key, key)
+
+    def load_filament_profiles(self):
+        filaments = []
+        try:
+            if os.path.exists(FILAMENT_PROFILES_FILE):
+                with zipfile.ZipFile(FILAMENT_PROFILES_FILE, 'r') as z:
+                    settings = json.loads(z.read('Metadata/project_settings.config').decode('utf-8'))
+                    for t, sid in zip(settings.get('filament_type', []), settings.get('filament_settings_id', [])):
+                        filaments.append({'type': t, 'settings_id': sid})
+        except: pass
+        
+        if not filaments:
+            filaments = [
+                {'type': 'PLA',  'settings_id': DEFAULT_FILAMENT_PROFILE},
+                {'type': 'PETG', 'settings_id': 'Snapmaker PETG HF'},
+                {'type': 'ABS',  'settings_id': 'Generic ABS'},
+                {'type': 'TPU',  'settings_id': 'Generic TPU'},
+            ]
+        return filaments
+
+    def normalize_color(self, color: str) -> str:
+        if not color: return '#000000'
+        c = color.lstrip('#')
+        if len(c) == 8: c = c[:6]
+        if len(c) != 6: return '#000000'
+        try: int(c, 16)
+        except ValueError: return '#000000'
+        return f'#{c.upper()}'
+
+    def parse_bambu_filaments(self, filepath: str) -> list[dict]:
+        filaments = []
+        try:
+            with zipfile.ZipFile(filepath, 'r') as z:
+                names = z.namelist()
+                if 'Metadata/slice_info.config' in names:
+                    xml_str = z.read('Metadata/slice_info.config').decode('utf-8')
+                    # Prevenir fallos si tiene cabeceras extrañas
+                    if "<?xml" in xml_str or "<config>" in xml_str:
+                        root = ET.fromstring(xml_str)
+                        for fil in root.findall('.//filament'):
+                            filaments.append({
+                                'id':    fil.get('id'),
+                                'color': self.normalize_color(fil.get('color', '')),
+                                'type':  fil.get('type') or 'PLA',
+                            })
+                if not filaments and 'Metadata/project_settings.config' in names:
+                    cfg = json.loads(z.read('Metadata/project_settings.config').decode('utf-8'))
+                    colors = cfg.get('filament_colour', [])
+                    types  = cfg.get('filament_type', [])
+                    for i, color in enumerate(colors):
+                        filaments.append({
+                            'id':    str(i + 1),
+                            'color': self.normalize_color(color),
+                            'type':  types[i] if i < len(types) else 'PLA',
+                        })
+        except: pass
+        return filaments
 
     def get_tooltip(self, param_name):
         base_name = param_name.split('.')[-1].lower()
@@ -249,6 +339,9 @@ class ProfessionalCompareApp(ctk.CTk):
             dd.configure(values=self.get_sorted_keys(tipo))
             if sel in ["No encontrados", "Not found"]: dd.set(self.T("not_found"))
 
+        self.main_tabview._segmented_button._buttons_dict[self.T("tab_inspector")].configure(text=self.T("tab_inspector"))
+        self.main_tabview._segmented_button._buttons_dict[self.T("tab_converter")].configure(text=self.T("tab_converter"))
+
         if self.diferencias_actuales: self.renderizar_resultados()
         else:
             self.header_label.configure(text=self.T("res_title"))
@@ -261,7 +354,6 @@ class ProfessionalCompareApp(ctk.CTk):
         v1 = str(val1).strip().lower()
         v2 = str(val2).strip().lower()
         if v1 == v2: return True
-        
         bool_map = {"true": "1", "false": "0", "on": "1", "off": "0", "yes": "1", "no": "0"}
         if bool_map.get(v1, v1) == bool_map.get(v2, v2): return True
         
@@ -270,7 +362,6 @@ class ProfessionalCompareApp(ctk.CTk):
         try:
             if float(_v1) == float(_v2): return True
         except: pass
-        
         return False
 
     def cargar_favoritos(self):
@@ -497,25 +588,81 @@ class ProfessionalCompareApp(ctk.CTk):
         self.lbl_info_print = ctk.CTkLabel(self.info_bar, text="", font=ctk.CTkFont(size=14, weight="bold"), text_color=SNAPMAKER_TEAL)
         self.lbl_info_print.pack(side="left", padx=20)
 
-        # CONTENEDOR PRINCIPAL
-        self.content_container = ctk.CTkFrame(self.main_frame, fg_color=BG_SIDEBAR, corner_radius=12)
-        self.content_container.grid(row=2, column=0, sticky="nsew")
-        self.content_container.grid_rowconfigure(0, weight=1)
-        self.content_container.grid_columnconfigure(0, weight=1)
+        # TABVIEW PRINCIPAL
+        self.main_tabview = ctk.CTkTabview(self.main_frame, fg_color="transparent", segmented_button_selected_color=SNAPMAKER_TEAL, segmented_button_selected_hover_color=SNAPMAKER_TEAL_HOVER)
+        self.main_tabview.grid(row=2, column=0, sticky="nsew")
+        
+        tab_insp = self.main_tabview.add(self.T("tab_inspector"))
+        tab_conv = self.main_tabview.add(self.T("tab_converter"))
 
-        # TOOLTIP AREA 
-        self.tooltip_frame = ctk.CTkFrame(self.main_frame, fg_color=BG_CARD, height=40, corner_radius=8)
-        self.tooltip_frame.grid(row=3, column=0, sticky="ew", pady=(15, 0))
+        # --- PESTAÑA 1: INSPECTOR ---
+        tab_insp.grid_rowconfigure(0, weight=1)
+        tab_insp.grid_columnconfigure(0, weight=1)
+        
+        self.content_container = ctk.CTkFrame(tab_insp, fg_color=BG_SIDEBAR, corner_radius=12)
+        self.content_container.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
+        
+        self.tooltip_frame = ctk.CTkFrame(tab_insp, fg_color=BG_CARD, height=40, corner_radius=8)
+        self.tooltip_frame.grid(row=1, column=0, sticky="ew")
         self.tooltip_frame.pack_propagate(False)
         self.lbl_tooltip = ctk.CTkLabel(self.tooltip_frame, text=self.T("tooltip_default"), font=ctk.CTkFont(size=13, slant="italic"), text_color=TEXT_MAIN)
         self.lbl_tooltip.pack(side="left", padx=20)
+
+        # --- PESTAÑA 2: CONVERSOR ---
+        tab_conv.grid_columnconfigure(0, weight=1)
+        tab_conv.grid_rowconfigure(0, weight=1)
+        
+        conv_scroll = ctk.CTkScrollableFrame(tab_conv, fg_color="transparent")
+        conv_scroll.grid(row=0, column=0, sticky="nsew")
+        
+        conv_card = ctk.CTkFrame(conv_scroll, fg_color=BG_SIDEBAR, corner_radius=12)
+        conv_card.pack(fill="x", padx=20, pady=20)
+        
+        ctk.CTkLabel(conv_card, text=self.T("conv_title"), font=ctk.CTkFont(size=22, weight="bold"), text_color=SNAPMAKER_TEAL).pack(pady=(30, 10))
+        ctk.CTkLabel(conv_card, text=self.T("conv_desc"), font=ctk.CTkFont(size=14), text_color=TEXT_MUTED, wraplength=700, justify="center").pack(pady=(0, 20), padx=40)
+
+        # Area de Filamentos AMS
+        self.filaments_container = ctk.CTkFrame(conv_card, fg_color=BG_CARD, corner_radius=8)
+        self.filaments_container.pack(fill="x", padx=40, pady=10)
+        
+        self.lbl_filaments_title = ctk.CTkLabel(self.filaments_container, text=self.T("conv_no_filaments"), font=ctk.CTkFont(weight="bold"))
+        self.lbl_filaments_title.pack(pady=10)
+        
+        self.filaments_list_frame = ctk.CTkFrame(self.filaments_container, fg_color="transparent")
+        self.filaments_list_frame.pack(pady=(0, 10))
+
+        # Checkboxes
+        checks_frame = ctk.CTkFrame(conv_card, fg_color="transparent")
+        checks_frame.pack(pady=20)
+
+        self.chk_quality = ctk.CTkCheckBox(checks_frame, text=self.T("cat_quality"), font=ctk.CTkFont(size=16, weight="bold"), fg_color=SNAPMAKER_TEAL, hover_color=SNAPMAKER_TEAL_HOVER)
+        self.chk_quality.grid(row=0, column=0, padx=30, pady=15, sticky="w")
+        self.chk_quality.select()
+
+        self.chk_strength = ctk.CTkCheckBox(checks_frame, text=self.T("cat_strength"), font=ctk.CTkFont(size=16, weight="bold"), fg_color=SNAPMAKER_TEAL, hover_color=SNAPMAKER_TEAL_HOVER)
+        self.chk_strength.grid(row=0, column=1, padx=30, pady=15, sticky="w")
+        self.chk_strength.select()
+
+        self.chk_support = ctk.CTkCheckBox(checks_frame, text=self.T("cat_support"), font=ctk.CTkFont(size=16, weight="bold"), fg_color=SNAPMAKER_TEAL, hover_color=SNAPMAKER_TEAL_HOVER)
+        self.chk_support.grid(row=1, column=0, padx=30, pady=15, sticky="w")
+        self.chk_support.select()
+
+        self.chk_adhesion = ctk.CTkCheckBox(checks_frame, text=self.T("cat_adhesion"), font=ctk.CTkFont(size=16, weight="bold"), fg_color=SNAPMAKER_TEAL, hover_color=SNAPMAKER_TEAL_HOVER)
+        self.chk_adhesion.grid(row=1, column=1, padx=30, pady=15, sticky="w")
+        self.chk_adhesion.select()
+
+        self.chk_temp = ctk.CTkCheckBox(checks_frame, text=self.T("cat_material"), font=ctk.CTkFont(size=16, weight="bold"), fg_color=SNAPMAKER_TEAL, hover_color=SNAPMAKER_TEAL_HOVER)
+        self.chk_temp.grid(row=2, column=0, columnspan=2, pady=15)
+        
+        self.btn_convert = ctk.CTkButton(conv_card, text=self.T("conv_btn"), command=self.exportar_3mf_adaptado, fg_color=ACCENT_ORANGE, text_color=BG_MAIN, hover_color="#EAB308", height=50, font=ctk.CTkFont(size=16, weight="bold"))
+        self.btn_convert.pack(pady=40)
 
         self.render_empty_state(self.T("res_welcome"))
 
     def render_empty_state(self, msg):
         for w in self.content_container.winfo_children(): w.destroy()
         lbl = ctk.CTkLabel(self.content_container, text=msg, text_color=TEXT_MUTED, font=ctk.CTkFont(size=16))
-        lbl.grid(row=0, column=0, pady=100)
+        lbl.pack(expand=True)
 
     def set_tooltip(self, event, text):
         self.lbl_tooltip.configure(text=text, text_color=ACCENT_ORANGE)
@@ -527,10 +674,15 @@ class ProfessionalCompareApp(ctk.CTk):
         ruta = filedialog.askopenfilename(filetypes=[("3MF", "*.3mf")])
         if ruta:
             try:
+                self.ruta_3mf_actual = ruta
                 self.extraer_datos_3mf(ruta)
                 self.btn_load_3mf.configure(text=f"✓ {os.path.basename(ruta)[:20]}...")
                 self.lbl_status.configure(text=self.T("status_3mf_ok"))
                 
+                # Actualizar interfaz de filamentos del conversor
+                self.detected_filaments = self.parse_bambu_filaments(ruta)
+                self.actualizar_ui_filamentos()
+
                 if self.info_placas:
                     nombres_placas = list(self.info_placas.keys())
                     self.dd_plates.configure(values=nombres_placas)
@@ -539,6 +691,49 @@ class ProfessionalCompareApp(ctk.CTk):
                     self.autodetectar_material()
             except Exception as e: messagebox.showerror(self.T("error"), self.T("err_load_3mf").format(e))
 
+    def actualizar_ui_filamentos(self):
+        for w in self.filaments_list_frame.winfo_children(): w.destroy()
+        
+        if not self.detected_filaments:
+            self.lbl_filaments_title.configure(text=self.T("conv_no_filaments"))
+            return
+            
+        self.lbl_filaments_title.configure(text=self.T("conv_filaments"))
+        
+        for i, fil in enumerate(self.detected_filaments[:TARGET_FILAMENTS]):
+            row = ctk.CTkFrame(self.filaments_list_frame, fg_color="transparent")
+            row.pack(pady=5, fill="x")
+            
+            # Caja de color
+            color_box = ctk.CTkFrame(row, fg_color=fil['color'], width=24, height=24, corner_radius=4)
+            color_box.pack(side="left", padx=(0, 15))
+            
+            ctk.CTkLabel(row, text=f"Extruder {i+1}: {fil['type']}", font=ctk.CTkFont(weight="bold")).pack(side="left")
+
+    def _parse_time_weight(self, data_dict):
+        t_sec = data_dict.get("prediction", data_dict.get("print_time", data_dict.get("estimated_time", "")))
+        w_g = 0
+        if "filament_weights" in data_dict and isinstance(data_dict["filament_weights"], list):
+            w_g = sum(float(x) for x in data_dict["filament_weights"] if x)
+        elif "filament_weight" in data_dict and isinstance(data_dict["filament_weight"], str) and "," in data_dict["filament_weight"]:
+            w_g = sum(float(x) for x in data_dict["filament_weight"].split(",") if x.strip())
+        else:
+            val = data_dict.get("weight", data_dict.get("filament_weight", data_dict.get("cost", "")))
+            try: w_g = float(val) if val else 0
+            except: w_g = 0
+        try:
+            t_sec = float(t_sec)
+            if t_sec <= 0: raise ValueError
+            h, r = divmod(t_sec, 3600)
+            m, _ = divmod(r, 60)
+            t_str = f"{int(h)}h {int(m)}m" if h > 0 else f"{int(m)}m"
+        except: t_str = self.T("not_sliced")
+        try:
+            if w_g <= 0: raise ValueError
+            w_str = f"{float(w_g):.1f}g"
+        except: w_str = self.T("not_sliced")
+        return t_str, w_str
+
     def extraer_datos_3mf(self, ruta_3mf):
         self.placas_data = {}
         self.info_placas = {}
@@ -546,21 +741,16 @@ class ProfessionalCompareApp(ctk.CTk):
         plate_catalog = {} 
 
         with zipfile.ZipFile(ruta_3mf, 'r') as z:
-            # 1. Leer configs generales del proyecto
             for name in z.namelist():
                 if ("Metadata/" in name or "Config/" in name) and (name.endswith('.json') or name.endswith('.config')):
-                    if "plate_" in name or "slice_info" in name: 
-                        continue
-                    try: 
-                        datos_globales.update(json.loads(z.read(name).decode('utf-8', errors='ignore')))
+                    if "plate_" in name or "slice_info" in name: continue
+                    try: datos_globales.update(json.loads(z.read(name).decode('utf-8', errors='ignore')))
                     except: pass
             
-            # 2. Extraer catálogo de placas y sus tiempos/pesos (si está laminado)
             for name in z.namelist():
                 if "slice_info" in name:
                     try:
                         content = z.read(name).decode('utf-8', errors='ignore')
-                        
                         if "<?xml" in content or "<config>" in content or "<plate" in content:
                             plates_xml = re.findall(r'<plate\b[^>]*>(.*?)</plate>', content, re.DOTALL)
                             for p_xml in plates_xml:
@@ -569,7 +759,6 @@ class ProfessionalCompareApp(ctk.CTk):
                                 p_id = p_data.get('plater_id', p_data.get('plate_index', p_data.get('index', '')))
                                 p_name = p_data.get('plater_name', p_data.get('plate_name', p_data.get('name', '')))
                                 if not p_name: p_name = self.T("plate_num").format(p_id)
-                                
                                 if p_id:
                                     plate_catalog[p_id] = p_name
                                     t, w = self._parse_time_weight(p_data)
@@ -593,7 +782,6 @@ class ProfessionalCompareApp(ctk.CTk):
                     except: pass
                     break 
 
-            # 3. RASTREADOR INFALIBLE: Escanear miniaturas si el Slicer no creó slice_info
             for name in z.namelist():
                 match = re.search(r'plate_(\d+)', name)
                 if match:
@@ -601,12 +789,10 @@ class ProfessionalCompareApp(ctk.CTk):
                     if p_id not in plate_catalog:
                         plate_catalog[p_id] = self.T("plate_num").format(p_id)
 
-            # 4. Construir las placas
             if plate_catalog:
                 for p_id in sorted(plate_catalog.keys(), key=lambda x: int(x) if x.isdigit() else x):
                     p_name = plate_catalog[p_id]
                     p_data = {}
-                    
                     posibles_nombres = [f"Metadata/plate_{p_id}.json", f"Config/plate_{p_id}.json", f"plate_{p_id}.json"]
                     for fname in posibles_nombres:
                         if fname in z.namelist():
@@ -614,55 +800,21 @@ class ProfessionalCompareApp(ctk.CTk):
                                 p_data = json.loads(z.read(fname).decode('utf-8', errors='ignore'))
                                 break
                             except: pass
-                    
                     placa_final = datos_globales.copy()
                     placa_final.update(p_data)
-                    
                     unique_name = p_name
-                    if unique_name in self.placas_data:
-                        unique_name = f"{p_name} ({p_id})"
-                        
+                    if unique_name in self.placas_data: unique_name = f"{p_name} ({p_id})"
                     self.placas_data[unique_name] = placa_final
-                    
                     if unique_name not in self.info_placas:
                         self.info_placas[unique_name] = {"time": self.T("not_sliced"), "weight": self.T("not_sliced")}
             else:
                 self.placas_data[self.T("default_plate")] = datos_globales
                 self.info_placas[self.T("default_plate")] = {"time": self.T("not_sliced"), "weight": self.T("not_sliced")}
 
-    def _parse_time_weight(self, data_dict):
-        t_sec = data_dict.get("prediction", data_dict.get("print_time", data_dict.get("estimated_time", "")))
-        
-        w_g = 0
-        if "filament_weights" in data_dict and isinstance(data_dict["filament_weights"], list):
-            w_g = sum(float(x) for x in data_dict["filament_weights"] if x)
-        elif "filament_weight" in data_dict and isinstance(data_dict["filament_weight"], str) and "," in data_dict["filament_weight"]:
-            w_g = sum(float(x) for x in data_dict["filament_weight"].split(",") if x.strip())
-        else:
-            val = data_dict.get("weight", data_dict.get("filament_weight", data_dict.get("cost", "")))
-            try: w_g = float(val) if val else 0
-            except: w_g = 0
-        
-        try:
-            t_sec = float(t_sec)
-            if t_sec <= 0: raise ValueError
-            h, r = divmod(t_sec, 3600)
-            m, _ = divmod(r, 60)
-            t_str = f"{int(h)}h {int(m)}m" if h > 0 else f"{int(m)}m"
-        except: t_str = self.T("not_sliced")
-        
-        try:
-            if w_g <= 0: raise ValueError
-            w_str = f"{float(w_g):.1f}g"
-        except: w_str = self.T("not_sliced")
-        
-        return t_str, w_str
-
     def cambiar_placa(self, nombre_placa):
         info = self.info_placas.get(nombre_placa, {"time": self.T("not_sliced"), "weight": self.T("not_sliced")})
         self.lbl_info_print.configure(text=self.T("info_print").format(info["time"], info["weight"]))
-        if self.diferencias_actuales: 
-            self.ejecutar_comparacion()
+        if self.diferencias_actuales: self.ejecutar_comparacion()
 
     def aplanar_diccionario(self, d, prefix=''):
         items = {}
@@ -671,28 +823,6 @@ class ProfessionalCompareApp(ctk.CTk):
             if isinstance(v, dict): items.update(self.aplanar_diccionario(v, new_key))
             else: items[new_key] = v
         return items
-
-    def autodetectar_material(self):
-        placa_actual = self.dd_plates.get()
-        if not placa_actual or placa_actual not in self.placas_data: return
-        
-        mw_plano = self.aplanar_diccionario(self.placas_data[placa_actual])
-        material_detectado = None
-        
-        for clave, valor in mw_plano.items():
-            if 'filament_type' in clave:
-                if isinstance(valor, list) and len(valor) > 0: material_detectado = str(valor[0]).upper()
-                elif isinstance(valor, str): material_detectado = valor.upper()
-                break
-        
-        if material_detectado:
-            opciones = self.dd_filamento.cget("values")
-            coincidencias = [opcion for opcion in opciones if material_detectado in opcion.upper()]
-            if coincidencias:
-                coincidencia = next((opc for opc in coincidencias if "SNAPMAKER" in opc.upper()), coincidencias[0])
-                self.dd_filamento.set(coincidencia)
-                self.actualizar_estado_boton_fav(coincidencia, "filament", self.btn_fav_fil)
-                self.lbl_status.configure(text=self.T("status_auto_mat").format(material_detectado))
 
     def cargar_json_con_herencia(self, ruta_archivo, visitados=None):
         if visitados is None: visitados = set()
@@ -749,14 +879,11 @@ class ProfessionalCompareApp(ctk.CTk):
 
         for k, v_mw in mw_p.items():
             if any(x in k.lower() for x in basura_interna): continue
-            
             valor_rescate = self.valores_base_orca.get(k, self.T("internal_base"))
             v_snap = snap_p.get(k, valor_rescate)
             
             if not self.valores_son_iguales(v_mw, v_snap):
-                if v_snap == "Heredado del Slicer" or v_snap == "Inherited from Slicer": 
-                    v_snap = self.T("inherited")
-                
+                if v_snap in ["Heredado del Slicer", "Inherited from Slicer"]: v_snap = self.T("inherited")
                 self.diferencias_actuales.append({
                     "param": k, "v_mw": v_mw, "v_snap": v_snap, 
                     "categoria": self.categorizar_parametro(k), "es_clave": self.es_parametro_clave(k)
@@ -770,7 +897,6 @@ class ProfessionalCompareApp(ctk.CTk):
         if not self.diferencias_actuales:
             lbl = ctk.CTkLabel(self.content_container, text=self.T("res_no_diff"), text_color=TEXT_MUTED, font=ctk.CTkFont(size=16))
             lbl.pack(expand=True)
-            self.header_label.configure(text=self.T("no_changes"))
             return
 
         filtro_basico = self.switch_filtro.get() == 1
@@ -787,11 +913,8 @@ class ProfessionalCompareApp(ctk.CTk):
         if items_mostrados == 0:
             lbl = ctk.CTkLabel(self.content_container, text=self.T("res_no_basic"), text_color=TEXT_MUTED, font=ctk.CTkFont(size=16))
             lbl.pack(expand=True)
-            self.header_label.configure(text=self.T("all_perfect"))
             return
 
-        self.header_label.configure(text=self.T("res_showing").format(items_mostrados))
-        
         tabview = ctk.CTkTabview(self.content_container, fg_color="transparent", segmented_button_selected_color=SNAPMAKER_TEAL, segmented_button_selected_hover_color=SNAPMAKER_TEAL_HOVER)
         tabview.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -801,49 +924,30 @@ class ProfessionalCompareApp(ctk.CTk):
             if cat_key in grupos:
                 cat_nombre_traducido = self.T(cat_key)
                 tabview.add(cat_nombre_traducido)
-                
                 scroll = ctk.CTkScrollableFrame(tabview.tab(cat_nombre_traducido), fg_color="transparent")
                 scroll.pack(fill="both", expand=True)
 
-                header = ctk.CTkFrame(scroll, fg_color=BG_CARD, height=35, corner_radius=6)
-                header.pack(fill="x", pady=(0, 5))
-                header.pack_propagate(False)
-
-                ctk.CTkLabel(header, text=self.T("col_param"), font=ctk.CTkFont(weight="bold", size=13), text_color=TEXT_MUTED, anchor="w").pack(side="left", padx=15, fill="x", expand=True)
-                ctk.CTkLabel(header, text=self.T("col_mw"), font=ctk.CTkFont(weight="bold", size=13), text_color=TEXT_MUTED, width=150, anchor="w").pack(side="left", padx=10)
-                ctk.CTkLabel(header, text=self.T("col_u1"), font=ctk.CTkFont(weight="bold", size=13), text_color=TEXT_MUTED, width=150, anchor="w").pack(side="left", padx=15)
-
-                color_alterno = True
                 for item in grupos[cat_key]:
-                    bg = BG_ROW_ALT if color_alterno else "transparent"
-                    color_alterno = not color_alterno
-
-                    fila = ctk.CTkFrame(scroll, fg_color=bg, height=45, corner_radius=4)
+                    fila = ctk.CTkFrame(scroll, fg_color=BG_ROW_ALT, height=45, corner_radius=4)
                     fila.pack(fill="x", pady=2)
                     fila.pack_propagate(False)
 
                     clean_name = item["param"].split('.')[-1].replace('_', ' ').capitalize()
-                    
                     lbl_name = ctk.CTkLabel(fila, text=clean_name, font=ctk.CTkFont(size=14, weight="bold"), text_color=TEXT_MAIN, anchor="w", cursor="hand2")
                     lbl_name.pack(side="left", padx=15, fill="x", expand=True)
-                    
                     lbl_name.bind("<Enter>", lambda e, p=item["param"]: self.set_tooltip(e, self.get_tooltip(p)))
                     lbl_name.bind("<Leave>", self.clear_tooltip)
 
                     ctk.CTkLabel(fila, text=str(item["v_mw"]), font=ctk.CTkFont(size=14, weight="bold"), text_color=ACCENT_ORANGE, width=150, anchor="w").pack(side="left", padx=10)
                     ctk.CTkLabel(fila, text=str(item["v_snap"]), font=ctk.CTkFont(size=13), text_color=SNAPMAKER_TEAL, width=150, anchor="w").pack(side="left", padx=15)
 
-    # --- EXPORTAR REPORTE ---
     def exportar_txt(self):
         if not self.diferencias_actuales: return
-        
         f = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text file", "*.txt")], title=self.T("export_title"))
         if not f: return
-        
         try:
             with open(f, 'w', encoding='utf-8') as file:
                 file.write(f"{self.T('txt_report_title')}\n")
-                
                 placa_actual = self.dd_plates.get()
                 if not placa_actual or placa_actual == "---": placa_actual = self.T('txt_none')
                 file.write(f"{self.T('txt_plate')}: {placa_actual}\n")
@@ -851,7 +955,6 @@ class ProfessionalCompareApp(ctk.CTk):
                 file.write(f"{self.T('txt_process')}: {self.dd_proceso.get()}\n")
                 file.write(f"{self.T('txt_filament')}: {self.dd_filamento.get()}\n")
                 file.write("-" * 40 + "\n\n")
-                
                 filtro_basico = self.switch_filtro.get() == 1
                 for item in self.diferencias_actuales:
                     if filtro_basico and not item["es_clave"]: continue
@@ -859,8 +962,167 @@ class ProfessionalCompareApp(ctk.CTk):
                     file.write(f"[*] {clean_name}\n")
                     file.write(f"    {self.T('txt_change_to')} {item['v_mw']}\n")
                     file.write(f"    {self.T('txt_current')} {item['v_snap']}\n\n")
-            
             messagebox.showinfo(self.T("export_title"), self.T("export_success"))
+        except Exception as e:
+            messagebox.showerror(self.T("error"), str(e))
+
+    # --- NUEVA LÓGICA DE EXPORTACIÓN 3MF (EL CONVERSOR) ---
+    def exportar_3mf_adaptado(self):
+        if not self.ruta_3mf_actual:
+            messagebox.showwarning(self.T("attention"), self.T("warn_load_first"))
+            return
+
+        f_out = filedialog.asksaveasfilename(defaultextension=".3mf", filetypes=[("3MF file", "*.3mf")], title=self.T("export_title"))
+        if not f_out: return
+
+        allowed_keys = set()
+        if self.chk_quality.get(): allowed_keys.update(CONVERTER_PARAMS["quality"])
+        if self.chk_strength.get(): allowed_keys.update(CONVERTER_PARAMS["strength"])
+        if self.chk_support.get(): allowed_keys.update(CONVERTER_PARAMS["support"])
+        if self.chk_adhesion.get(): allowed_keys.update(CONVERTER_PARAMS["adhesion"])
+        if self.chk_temp.get(): allowed_keys.update(CONVERTER_PARAMS["temperature"])
+
+        maq_clean = self.dd_maquina.get().replace("⭐ ", "").replace(self.T("tag_user"), "").replace(self.T("tag_system"), "").strip()
+        pro_clean = self.dd_proceso.get().replace("⭐ ", "").replace(self.T("tag_user"), "").replace(self.T("tag_system"), "").strip()
+        fil_clean = self.dd_filamento.get().replace("⭐ ", "").replace(self.T("tag_user"), "").replace(self.T("tag_system"), "").strip()
+
+        printer_model = "Snapmaker U1"
+        if "J1" in maq_clean: printer_model = "Snapmaker J1"
+        elif "Artisan" in maq_clean: printer_model = "Snapmaker Artisan"
+
+        all_transferable_keys = set(sum(CONVERTER_PARAMS.values(), []))
+
+        # Asignar extrusores 1 a 4 automáticamente a los filamentos detectados
+        user_colors = {}
+        for i, fil in enumerate(self.detected_filaments[:TARGET_FILAMENTS]):
+            user_colors[fil['id']] = {'color': fil['color'], 'type': fil['type']}
+
+        try:
+            with zipfile.ZipFile(self.ruta_3mf_actual, 'r') as z:
+                orig_settings = json.loads(z.read('Metadata/project_settings.config').decode('utf-8'))
+        except:
+            orig_settings = {}
+
+        diff = orig_settings.get('different_settings_to_system', [])
+        has_support = any(isinstance(s, str) and 'enable_support' in s for s in diff)
+        template = 'u1_template_supports.3mf' if has_support else 'u1_template.3mf'
+
+        try:
+            with zipfile.ZipFile(template, 'r') as z:
+                u1_settings = json.loads(z.read('Metadata/project_settings.config').decode('utf-8'))
+        except Exception as e:
+            messagebox.showerror(self.T("error"), f"Faltan plantillas base ({template}). Ponlas en la carpeta.")
+            return
+
+        try:
+            with zipfile.ZipFile(self.ruta_3mf_actual, 'r') as z_in, \
+                 zipfile.ZipFile(f_out, 'w', compression=zipfile.ZIP_DEFLATED) as z_out:
+
+                # --- 1. MODIFICAR SLICE_INFO (XML) ---
+                if 'Metadata/slice_info.config' in z_in.namelist():
+                    xml_str = z_in.read('Metadata/slice_info.config').decode('utf-8')
+                    xml_str = re.sub(r'key="printer_model_id" value="[^"]*"', f'key="printer_model_id" value="{printer_model}"', xml_str)
+                    
+                    if "<?xml" in xml_str or "<config>" in xml_str:
+                        root = ET.fromstring(xml_str)
+                        filaments_parent = root.find('.//plate') or root
+                        existing_nodes = filaments_parent.findall('filament')
+                        
+                        id_mapping = {}
+                        new_id_counter = 1
+
+                        for node in list(existing_nodes):
+                            old_id = node.get('id')
+                            if old_id not in user_colors:
+                                filaments_parent.remove(node)
+                            else:
+                                conf = user_colors[old_id]
+                                id_mapping[old_id] = str(new_id_counter)
+                                node.set('id', str(new_id_counter))
+                                node.set('color', conf['color'])
+                                node.set('type', conf['type'])
+                                new_id_counter += 1
+
+                        while new_id_counter <= TARGET_FILAMENTS:
+                            dummy = ET.SubElement(filaments_parent, 'filament')
+                            dummy.set('id', str(new_id_counter))
+                            dummy.set('type', 'PLA')
+                            dummy.set('color', '#FFFFFFFF')
+                            dummy.set('used_m', '0')
+                            dummy.set('used_g', '0')
+                            new_id_counter += 1
+
+                        modified_slice_info = ET.tostring(root, encoding='utf-8', xml_declaration=True)
+                    else:
+                        modified_slice_info = xml_str.encode('utf-8')
+                else:
+                    modified_slice_info = None
+
+                # --- 2. MODIFICAR MODEL_SETTINGS (XML) ---
+                if 'Metadata/model_settings.config' in z_in.namelist():
+                    model_root = ET.fromstring(z_in.read('Metadata/model_settings.config').decode('utf-8'))
+                    for meta in model_root.findall('.//metadata[@key="extruder"]'):
+                        old_ext = meta.get('value')
+                        if 'id_mapping' in locals() and old_ext in id_mapping:
+                            meta.set('value', id_mapping[old_ext])
+                    modified_model_settings = ET.tostring(model_root, encoding='utf-8', xml_declaration=True)
+                else:
+                    modified_model_settings = None
+
+                # --- 3. MODIFICAR PROJECT_SETTINGS (JSON) ---
+                combined = u1_settings.copy()
+                new_colors = []
+                new_types = []
+
+                for fil in self.detected_filaments:
+                    fid = fil['id']
+                    if fid not in user_colors: continue
+                    color = user_colors[fid]['color']
+                    ftype = user_colors[fid]['type']
+                    color = (color + 'FF') if len(color) == 7 else color
+                    new_colors.append(color.upper())
+                    new_types.append(ftype)
+
+                while len(new_colors) < TARGET_FILAMENTS:
+                    new_colors.append('#FFFFFFFF')
+                    new_types.append('PLA')
+
+                combined['filament_colour'] = new_colors
+                combined['filament_type'] = new_types
+
+                profile_map = {f['type']: f['settings_id'] for f in self.available_filaments}
+                default_profile = self.available_filaments[0]['settings_id'] if self.available_filaments else DEFAULT_FILAMENT_PROFILE
+                combined['filament_settings_id'] = [profile_map.get(t, default_profile) for t in new_types]
+
+                for key, val in combined.items():
+                    if key.startswith('filament_') and isinstance(val, list) and 0 < len(val) != TARGET_FILAMENTS:
+                        if len(val) < TARGET_FILAMENTS:
+                            val.extend([val[-1]] * (TARGET_FILAMENTS - len(val)))
+                        else:
+                            combined[key] = val[:TARGET_FILAMENTS]
+
+                # Fusión final de parámetros seleccionados
+                for k in allowed_keys:
+                    if k in orig_settings:
+                        combined[k] = orig_settings[k]
+
+                combined_bytes = json.dumps(combined, indent=4, ensure_ascii=False).encode('utf-8')
+
+                # --- 4. ENSAMBLAR EL NUEVO .3MF ---
+                for item in z_in.infolist():
+                    safe_name = posixpath.normpath(item.filename).lstrip('/')
+                    if safe_name.startswith('..'): continue
+
+                    if item.filename == 'Metadata/project_settings.config':
+                        z_out.writestr(item, combined_bytes)
+                    elif item.filename == 'Metadata/slice_info.config' and modified_slice_info:
+                        z_out.writestr(item, modified_slice_info)
+                    elif item.filename == 'Metadata/model_settings.config' and modified_model_settings:
+                        z_out.writestr(item, modified_model_settings)
+                    else:
+                        z_out.writestr(item, z_in.read(item.filename))
+            
+            messagebox.showinfo(self.T("export_title"), self.T("conv_success"))
         except Exception as e:
             messagebox.showerror(self.T("error"), str(e))
 
