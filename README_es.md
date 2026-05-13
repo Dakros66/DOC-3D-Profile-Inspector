@@ -1,3 +1,14 @@
+⚠️⚠️***DEBERÍAS USAR ESTA APLICACIÓN QUE INTEGRA ESTAS FUNCIONES CON UN NUEVO NÚCLEO TODO UNO*** ⚠️⚠️
+
+[DOC-U1_Link](https://github.com/Dakros66/DOC-U1-Link). 
+
+[DOC-U1_Link](https://github.com/Dakros66/DOC-U1-Link). 
+
+[DOC-U1_Link](https://github.com/Dakros66/DOC-U1-Link). 
+
+
+
+
 # 🔍 DOC 3D Profile Inspector
 
 *Read this in other languages: [English](README.md)*
